@@ -11,15 +11,27 @@ function stripAnsi(text: string): string {
   return text.replace(ANSI_ESCAPE_PATTERN, "");
 }
 
-export function runValidation(command: string, cwd: string): Promise<ValidationResult> {
+// generous enough that a normal test/lint/build command is never cut off
+// early, but a command that's genuinely stuck no longer hangs the whole
+// review forever - it just comes back as a failed check instead.
+const DEFAULT_VALIDATION_TIMEOUT_MS = 2 * 60 * 1000;
+
+export function runValidation(
+  command: string,
+  cwd: string,
+  timeoutMs = DEFAULT_VALIDATION_TIMEOUT_MS,
+): Promise<ValidationResult> {
   return new Promise((resolve) => {
-    exec(command, { cwd }, (error, stdout, stderr) => {
+    exec(command, { cwd, timeout: timeoutMs }, (error, stdout, stderr) => {
       // a command failing is a totally normal thing to happen here - that's
       // the whole reason someone runs a validation. so we resolve with a
       // "failed" result instead of rejecting, which used to blow up the
       // entire review just because one check came back red.
       if (error) {
-        resolve({ command, status: "failed", output: stripAnsi(stdout || stderr || error.message) });
+        const output = error.killed
+          ? `Command timed out after ${timeoutMs}ms\n\n${stdout || stderr}`
+          : stdout || stderr || error.message;
+        resolve({ command, status: "failed", output: stripAnsi(output) });
         return;
       }
       resolve({ command, status: "passed", output: stripAnsi(stdout || stderr) });
@@ -27,10 +39,14 @@ export function runValidation(command: string, cwd: string): Promise<ValidationR
   });
 }
 
-export async function runValidations(commands: string[], cwd: string): Promise<ValidationResult[]> {
+export async function runValidations(
+  commands: string[],
+  cwd: string,
+  timeoutMs = DEFAULT_VALIDATION_TIMEOUT_MS,
+): Promise<ValidationResult[]> {
   const results: ValidationResult[] = [];
   for (const command of commands) {
-    results.push(await runValidation(command, cwd));
+    results.push(await runValidation(command, cwd, timeoutMs));
   }
   return results;
 }
